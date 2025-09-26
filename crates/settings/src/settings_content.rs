@@ -560,6 +560,10 @@ pub struct FileFinderSettingsContent {
     /// Default: None
     /// todo() -> Change this type to an enum
     pub include_ignored: Option<bool>,
+    /// Determines the fuzzy matching algorithm behavior.
+    ///
+    /// Default: zed
+    pub fuzzy_matching_algorithm: Option<FuzzyMatchingAlgorithmContent>,
 }
 
 #[derive(
@@ -573,6 +577,16 @@ pub enum FileFinderWidthContent {
     Large,
     XLarge,
     Full,
+}
+
+#[derive(
+    Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, MergeFrom,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum FuzzyMatchingAlgorithmContent {
+    #[default]
+    Zed,
+    Intellij,
 }
 
 #[skip_serializing_none]

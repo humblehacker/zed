@@ -16,6 +16,8 @@ doctest = false
 gpui.workspace = true
 util.workspace = true
 log.workspace = true
+serde.workspace = true
+schemars.workspace = true
 workspace-hack.workspace = true
 
 [dev-dependencies]

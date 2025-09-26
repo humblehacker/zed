@@ -6451,6 +6451,8 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "log",
+ "schemars 1.0.1",
+ "serde",
  "util",
  "workspace-hack",
 ]

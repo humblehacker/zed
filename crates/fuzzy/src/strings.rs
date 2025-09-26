@@ -1,5 +1,5 @@
 use crate::{
-    CharBag,
+    CharBag, FuzzyMatchingAlgorithm,
     matcher::{MatchCandidate, Matcher},
 };
 use gpui::BackgroundExecutor;
@@ -125,6 +125,31 @@ pub async fn match_strings<T>(
 where
     T: Borrow<StringMatchCandidate> + Sync,
 {
+    match_strings_with_algorithm(
+        candidates,
+        query,
+        smart_case,
+        penalize_length,
+        max_results,
+        cancel_flag,
+        executor,
+        FuzzyMatchingAlgorithm::Zed,
+    ).await
+}
+
+pub async fn match_strings_with_algorithm<T>(
+    candidates: &[T],
+    query: &str,
+    smart_case: bool,
+    penalize_length: bool,
+    max_results: usize,
+    cancel_flag: &AtomicBool,
+    executor: BackgroundExecutor,
+    algorithm_mode: FuzzyMatchingAlgorithm,
+) -> Vec<StringMatch>
+where
+    T: Borrow<StringMatchCandidate> + Sync,
+{
     if candidates.is_empty() || max_results == 0 {
         return Default::default();
     }
@@ -167,6 +192,7 @@ where
                         query_char_bag,
                         smart_case,
                         penalize_length,
+                        algorithm_mode,
                     );
 
                     matcher.match_candidates(

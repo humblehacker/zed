@@ -4,11 +4,17 @@ use std::{
     sync::atomic::{self, AtomicBool},
 };
 
-use crate::CharBag;
+use crate::{CharBag, FuzzyMatchingAlgorithm};
 
 const BASE_DISTANCE_PENALTY: f64 = 0.6;
 const ADDITIONAL_DISTANCE_PENALTY: f64 = 0.05;
 const MIN_DISTANCE_PENALTY: f64 = 0.2;
+
+// IntelliJ-style scoring constants
+const INTELLIJ_CAMEL_CASE_BONUS: f64 = 0.95;
+const INTELLIJ_WORD_BOUNDARY_BONUS: f64 = 0.85;
+const INTELLIJ_ABBREVIATION_BONUS: f64 = 1.2;
+const INTELLIJ_CONSECUTIVE_BONUS: f64 = 1.1;
 
 // TODO:
 // Use `Path` instead of `&str` for paths.
@@ -23,6 +29,7 @@ pub struct Matcher<'a> {
     last_positions: Vec<usize>,
     score_matrix: Vec<Option<f64>>,
     best_position_matrix: Vec<usize>,
+    algorithm_mode: FuzzyMatchingAlgorithm,
 }
 
 pub trait MatchCandidate {
@@ -37,6 +44,7 @@ impl<'a> Matcher<'a> {
         query_char_bag: CharBag,
         smart_case: bool,
         penalize_length: bool,
+        algorithm_mode: FuzzyMatchingAlgorithm,
     ) -> Self {
         Self {
             query,
@@ -49,6 +57,7 @@ impl<'a> Matcher<'a> {
             best_position_matrix: Vec::new(),
             smart_case,
             penalize_length,
+            algorithm_mode,
         }
     }
 
@@ -262,21 +271,63 @@ impl<'a> Matcher<'a> {
                         None => path[j_regular - 1 - prefix.len()],
                     };
 
-                    if last == '/' {
-                        char_score = 0.9;
-                    } else if (last == '-' || last == '_' || last == ' ' || last.is_numeric())
-                        || (last.is_lowercase() && curr.is_uppercase())
-                    {
-                        char_score = 0.8;
-                    } else if last == '.' {
-                        char_score = 0.7;
-                    } else if query_idx == 0 {
-                        char_score = BASE_DISTANCE_PENALTY;
-                    } else {
-                        char_score = MIN_DISTANCE_PENALTY.max(
-                            BASE_DISTANCE_PENALTY
-                                - (j - path_idx - 1) as f64 * ADDITIONAL_DISTANCE_PENALTY,
-                        );
+                    match self.algorithm_mode {
+                        FuzzyMatchingAlgorithm::Intellij => {
+                            if last == '/' {
+                                char_score = 0.9;
+                            } else if last.is_lowercase() && curr.is_uppercase() {
+                                // CamelCase boundary - higher priority in IntelliJ mode
+                                char_score = INTELLIJ_CAMEL_CASE_BONUS;
+                            } else if last == '-' || last == '_' || last == ' ' || last.is_numeric() {
+                                // Word boundary
+                                char_score = INTELLIJ_WORD_BOUNDARY_BONUS;
+                            } else if last == '.' {
+                                char_score = 0.7;
+                            } else if query_idx == 0 {
+                                char_score = BASE_DISTANCE_PENALTY;
+                            } else {
+                                char_score = MIN_DISTANCE_PENALTY.max(
+                                    BASE_DISTANCE_PENALTY
+                                        - (j - path_idx - 1) as f64 * ADDITIONAL_DISTANCE_PENALTY,
+                                );
+                            }
+
+                            // Check for abbreviation matching in IntelliJ mode
+                            if Self::is_abbreviation_match(
+                                &self.query,
+                                &self.lowercase_query,
+                                query_idx,
+                                prefix,
+                                path,
+                                j_regular
+                            ) {
+                                char_score *= INTELLIJ_ABBREVIATION_BONUS;
+                            }
+
+                            // Consecutive character bonus
+                            if query_idx > 0 && j == path_idx {
+                                char_score *= INTELLIJ_CONSECUTIVE_BONUS;
+                            }
+                        },
+                        FuzzyMatchingAlgorithm::Zed => {
+                            // Original Zed scoring logic
+                            if last == '/' {
+                                char_score = 0.9;
+                            } else if (last == '-' || last == '_' || last == ' ' || last.is_numeric())
+                                || (last.is_lowercase() && curr.is_uppercase())
+                            {
+                                char_score = 0.8;
+                            } else if last == '.' {
+                                char_score = 0.7;
+                            } else if query_idx == 0 {
+                                char_score = BASE_DISTANCE_PENALTY;
+                            } else {
+                                char_score = MIN_DISTANCE_PENALTY.max(
+                                    BASE_DISTANCE_PENALTY
+                                        - (j - path_idx - 1) as f64 * ADDITIONAL_DISTANCE_PENALTY,
+                                );
+                            }
+                        }
                     }
                 }
 
@@ -336,6 +387,68 @@ impl<'a> Matcher<'a> {
         self.score_matrix[query_idx * path_len + path_idx] = Some(score);
         score
     }
+
+    fn is_abbreviation_match(
+        query: &[char],
+        _lowercase_query: &[char],
+        query_idx: usize,
+        prefix: &[char],
+        path: &[char],
+        current_pos: usize,
+    ) -> bool {
+        // Simple abbreviation detection: check if we're at the start of a word
+        // and if the next few query characters match word boundaries
+        if query_idx == 0 || query_idx >= query.len().saturating_sub(1) {
+            return false;
+        }
+
+        let get_char_at = |pos: usize| -> Option<char> {
+            if pos < prefix.len() {
+                prefix.get(pos).copied()
+            } else {
+                path.get(pos - prefix.len()).copied()
+            }
+        };
+
+        // Check if current position is at word boundary (camelCase or separator)
+        if current_pos > 0 {
+            if let Some(prev_char) = get_char_at(current_pos - 1) {
+                if let Some(curr_char) = get_char_at(current_pos) {
+                    if !(prev_char.is_lowercase() && curr_char.is_uppercase() ||
+                         prev_char == '/' || prev_char == '_' || prev_char == '-') {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Look ahead to see if next query chars match word starts
+        let mut remaining_query = query_idx + 1;
+        let mut search_pos = current_pos + 1;
+        let max_search = (prefix.len() + path.len()).min(search_pos + 20); // Limit search window
+
+        while remaining_query < query.len() && search_pos < max_search {
+            if let Some(search_char) = get_char_at(search_pos) {
+                if search_char.to_lowercase().next() == Some(query[remaining_query].to_lowercase().next().unwrap_or('\0')) {
+                    // Check if this is at a word boundary
+                    if search_pos > 0 {
+                        if let Some(prev_char) = get_char_at(search_pos - 1) {
+                            if prev_char.is_lowercase() && search_char.is_uppercase() ||
+                               prev_char == '/' || prev_char == '_' || prev_char == '-' {
+                                remaining_query += 1;
+                                if remaining_query >= query.len() - query_idx {
+                                    return true; // Found abbreviation pattern
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            search_pos += 1;
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]
@@ -350,18 +463,18 @@ mod tests {
     #[test]
     fn test_get_last_positions() {
         let mut query: &[char] = &['d', 'c'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, FuzzyMatchingAlgorithm::Zed);
         let result = matcher.find_last_positions(&['a', 'b', 'c'], &['b', 'd', 'e', 'f']);
         assert!(!result);
 
         query = &['c', 'd'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, FuzzyMatchingAlgorithm::Zed);
         let result = matcher.find_last_positions(&['a', 'b', 'c'], &['b', 'd', 'e', 'f']);
         assert!(result);
         assert_eq!(matcher.last_positions, vec![2, 4]);
 
         query = &['z', '/', 'z', 'f'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, FuzzyMatchingAlgorithm::Zed);
         let result = matcher.find_last_positions(&['z', 'e', 'd', '/'], &['z', 'e', 'd', '/', 'f']);
         assert!(result);
         assert_eq!(matcher.last_positions, vec![0, 3, 4, 8]);
@@ -559,7 +672,7 @@ mod tests {
             });
         }
 
-        let mut matcher = Matcher::new(&query, &lowercase_query, query_chars, smart_case, true);
+        let mut matcher = Matcher::new(&query, &lowercase_query, query_chars, smart_case, true, FuzzyMatchingAlgorithm::Zed);
 
         let cancel_flag = AtomicBool::new(false);
         let mut results = Vec::new();

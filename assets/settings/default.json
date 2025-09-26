@@ -1087,7 +1087,18 @@
     //   * `true`: Use all gitignored files
     //   * `false`: Use only the files Zed had indexed
     //   * `null`: Be smart and search for ignored when called from a gitignored worktree
-    "include_ignored": null
+    "include_ignored": null,
+    // Determines the fuzzy matching algorithm behavior.
+    // There are 2 possible values:
+    //
+    // 1. "zed": Use Zed's default fuzzy matching algorithm
+    //    "fuzzy_matching_algorithm": "zed"
+    //
+    // 2. "intellij": Use IntelliJ-style fuzzy matching with camelCase and abbreviation prioritization
+    //    "fuzzy_matching_algorithm": "intellij"
+    //
+    // Default: "zed"
+    "fuzzy_matching_algorithm": "zed"
   },
   // Whether or not to remove any trailing whitespace from lines of a buffer
   // before saving it.

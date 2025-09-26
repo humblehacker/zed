@@ -13,7 +13,7 @@ use collections::HashMap;
 use editor::Editor;
 use file_finder_settings::{FileFinderSettings, FileFinderWidth};
 use file_icons::FileIcons;
-use fuzzy::{CharBag, PathMatch, PathMatchCandidate};
+use fuzzy::{CharBag, FuzzyMatchingAlgorithm, PathMatch, PathMatchCandidate};
 use gpui::{
     Action, AnyElement, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
     KeyContext, Modifiers, ModifiersChangedEvent, ParentElement, Render, Styled, Task, WeakEntity,
@@ -510,6 +510,7 @@ impl Matches {
         &self,
         entry: &Match,
         currently_opened: Option<&FoundPath>,
+        algorithm_mode: FuzzyMatchingAlgorithm,
     ) -> Result<usize, usize> {
         if let Match::History {
             path,
@@ -531,7 +532,7 @@ impl Matches {
             self.matches.binary_search_by(|m| {
                 // `reverse()` since if cmp_matches(a, b) == Ordering::Greater, then a is better than b.
                 // And we want the better entries go first.
-                Self::cmp_matches(self.separate_history, currently_opened, m, entry).reverse()
+                Self::cmp_matches(self.separate_history, currently_opened, m, entry, algorithm_mode).reverse()
             })
         }
     }
@@ -543,6 +544,7 @@ impl Matches {
         query: Option<&FileSearchQuery>,
         new_search_matches: impl Iterator<Item = ProjectPanelOrdMatch>,
         extend_old_matches: bool,
+        algorithm_mode: FuzzyMatchingAlgorithm,
     ) {
         let Some(query) = query else {
             // assuming that if there's no query, then there's no search matches.
@@ -557,7 +559,7 @@ impl Matches {
             return;
         };
 
-        let new_history_matches = matching_history_items(history_items, currently_opened, query);
+        let new_history_matches = matching_history_items(history_items, currently_opened, query, algorithm_mode);
         let new_search_matches: Vec<Match> = new_search_matches
             .filter(|path_match| !new_history_matches.contains_key(&path_match.0.path))
             .map(Match::Search)
@@ -583,7 +585,7 @@ impl Matches {
             .into_values()
             .chain(new_search_matches.into_iter())
         {
-            match self.position(&new_match, currently_opened) {
+            match self.position(&new_match, currently_opened, algorithm_mode) {
                 Ok(_duplicate) => continue,
                 Err(i) => {
                     self.matches.insert(i, new_match);
@@ -601,6 +603,7 @@ impl Matches {
         currently_opened: Option<&FoundPath>,
         a: &Match,
         b: &Match,
+        algorithm_mode: FuzzyMatchingAlgorithm,
     ) -> cmp::Ordering {
         // Handle CreateNew variant - always put it at the end
         match (a, b) {
@@ -651,9 +654,30 @@ impl Matches {
         let b_in_filename = Self::is_filename_match(b_panel_match);
 
         match (a_in_filename, b_in_filename) {
-            (true, false) => return cmp::Ordering::Greater,
-            (false, true) => return cmp::Ordering::Less,
-            _ => {} // Both are filename matches or both are path matches
+            (true, false) => {
+                // Filename matches get priority, stronger in IntelliJ mode
+                return match algorithm_mode {
+                    FuzzyMatchingAlgorithm::Intellij => cmp::Ordering::Greater,
+                    FuzzyMatchingAlgorithm::Zed => cmp::Ordering::Greater,
+                };
+            },
+            (false, true) => {
+                return match algorithm_mode {
+                    FuzzyMatchingAlgorithm::Intellij => cmp::Ordering::Less,
+                    FuzzyMatchingAlgorithm::Zed => cmp::Ordering::Less,
+                };
+            },
+            (true, true) => {
+                // Both are filename matches - in IntelliJ mode, prefer consecutive characters
+                if algorithm_mode == FuzzyMatchingAlgorithm::Intellij {
+                    let a_consecutive = Self::count_consecutive_chars(a_panel_match);
+                    let b_consecutive = Self::count_consecutive_chars(b_panel_match);
+                    if a_consecutive != b_consecutive {
+                        return a_consecutive.cmp(&b_consecutive);
+                    }
+                }
+            },
+            _ => {} // Both are path matches
         }
 
         a_panel_match.cmp(b_panel_match)
@@ -684,12 +708,32 @@ impl Matches {
 
         false
     }
+
+    fn count_consecutive_chars(panel_match: &ProjectPanelOrdMatch) -> usize {
+        if panel_match.0.positions.len() <= 1 {
+            return panel_match.0.positions.len();
+        }
+
+        let mut consecutive_count = 1;
+        let mut max_consecutive = 1;
+
+        for window in panel_match.0.positions.windows(2) {
+            if window[1] == window[0] + 1 {
+                consecutive_count += 1;
+            } else {
+                max_consecutive = max_consecutive.max(consecutive_count);
+                consecutive_count = 1;
+            }
+        }
+        max_consecutive.max(consecutive_count)
+    }
 }
 
 fn matching_history_items<'a>(
     history_items: impl IntoIterator<Item = &'a FoundPath>,
     currently_opened: Option<&'a FoundPath>,
     query: &FileSearchQuery,
+    algorithm_mode: FuzzyMatchingAlgorithm,
 ) -> HashMap<Arc<RelPath>, Match> {
     let mut candidates_paths = HashMap::default();
 
@@ -730,12 +774,13 @@ fn matching_history_items<'a>(
     for (worktree, candidates) in history_items_by_worktrees {
         let max_results = candidates.len() + 1;
         matching_history_paths.extend(
-            fuzzy::match_fixed_path_set(
+            fuzzy::match_fixed_path_set_with_algorithm(
                 candidates,
                 worktree.to_usize(),
                 query.path_query(),
                 false,
                 max_results,
+                algorithm_mode,
             )
             .into_iter()
             .filter_map(|path_match| {
@@ -883,8 +928,9 @@ impl FileFinderDelegate {
         self.cancel_flag.store(true, atomic::Ordering::Release);
         self.cancel_flag = Arc::new(AtomicBool::new(false));
         let cancel_flag = self.cancel_flag.clone();
+        let algorithm_mode = FileFinderSettings::get_global(cx).fuzzy_matching_algorithm;
         cx.spawn_in(window, async move |picker, cx| {
-            let matches = fuzzy::match_path_sets(
+            let matches = fuzzy::match_path_sets_with_algorithm(
                 candidate_sets.as_slice(),
                 query.path_query(),
                 &relative_to,
@@ -892,6 +938,7 @@ impl FileFinderDelegate {
                 100,
                 &cancel_flag,
                 cx.background_executor().clone(),
+                algorithm_mode,
             )
             .await
             .into_iter()
@@ -930,12 +977,14 @@ impl FileFinderDelegate {
                 self.matches.get(self.selected_index).cloned()
             };
 
+            let algorithm_mode = FileFinderSettings::get_global(cx).fuzzy_matching_algorithm;
             self.matches.push_new_matches(
                 &self.history_items,
                 self.currently_opened_path.as_ref(),
                 Some(&query),
                 matches.into_iter(),
                 extend_old_matches,
+                algorithm_mode,
             );
 
             let path_style = self.project.read(cx).path_style(cx);
@@ -983,7 +1032,7 @@ impl FileFinderDelegate {
                 || self.calculate_selected_index(cx),
                 |m| {
                     self.matches
-                        .position(&m, self.currently_opened_path.as_ref())
+                        .position(&m, self.currently_opened_path.as_ref(), algorithm_mode)
                         .unwrap_or(0)
                 },
             );
@@ -1350,6 +1399,7 @@ impl PickerDelegate for FileFinderDelegate {
                     separate_history: self.separate_history,
                     ..Matches::default()
                 };
+                let algorithm_mode = FileFinderSettings::get_global(cx).fuzzy_matching_algorithm;
                 self.matches.push_new_matches(
                     self.history_items.iter().filter(|history_item| {
                         project
@@ -1362,6 +1412,7 @@ impl PickerDelegate for FileFinderDelegate {
                     None,
                     None.into_iter(),
                     false,
+                    algorithm_mode,
                 );
 
                 self.first_update = false;

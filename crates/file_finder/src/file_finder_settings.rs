@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::Settings;
+use fuzzy::FuzzyMatchingAlgorithm;
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct FileFinderSettings {
@@ -8,6 +9,7 @@ pub struct FileFinderSettings {
     pub modal_max_width: FileFinderWidth,
     pub skip_focus_for_active_in_search: bool,
     pub include_ignored: Option<bool>,
+    pub fuzzy_matching_algorithm: FuzzyMatchingAlgorithm,
 }
 
 impl Settings for FileFinderSettings {
@@ -19,6 +21,7 @@ impl Settings for FileFinderSettings {
             modal_max_width: file_finder.modal_max_width.unwrap().into(),
             skip_focus_for_active_in_search: file_finder.skip_focus_for_active_in_search.unwrap(),
             include_ignored: file_finder.include_ignored,
+            fuzzy_matching_algorithm: convert_algorithm(file_finder.fuzzy_matching_algorithm.unwrap_or_default()),
         }
     }
 }
@@ -34,6 +37,7 @@ pub enum FileFinderWidth {
     Full,
 }
 
+
 impl From<settings::FileFinderWidthContent> for FileFinderWidth {
     fn from(content: settings::FileFinderWidthContent) -> Self {
         match content {
@@ -43,5 +47,12 @@ impl From<settings::FileFinderWidthContent> for FileFinderWidth {
             settings::FileFinderWidthContent::XLarge => FileFinderWidth::XLarge,
             settings::FileFinderWidthContent::Full => FileFinderWidth::Full,
         }
+    }
+}
+
+fn convert_algorithm(content: settings::FuzzyMatchingAlgorithmContent) -> FuzzyMatchingAlgorithm {
+    match content {
+        settings::FuzzyMatchingAlgorithmContent::Zed => FuzzyMatchingAlgorithm::Zed,
+        settings::FuzzyMatchingAlgorithmContent::Intellij => FuzzyMatchingAlgorithm::Intellij,
     }
 }
