@@ -6,6 +6,15 @@ use std::{
 
 use crate::{CharBag, FuzzyMatchingAlgorithm};
 
+#[derive(Debug, Clone, Copy)]
+enum AbbreviationMatchType {
+    None,
+    BasicAbbreviation,
+    PerfectAbbreviation,
+    ExtendedAbbreviation,  // SCS + ervice
+    HybridMatch,          // SC + fuzzy remainder
+}
+
 const BASE_DISTANCE_PENALTY: f64 = 0.6;
 const ADDITIONAL_DISTANCE_PENALTY: f64 = 0.05;
 const MIN_DISTANCE_PENALTY: f64 = 0.2;
@@ -13,8 +22,13 @@ const MIN_DISTANCE_PENALTY: f64 = 0.2;
 // IntelliJ-style scoring constants
 const INTELLIJ_CAMEL_CASE_BONUS: f64 = 0.95;
 const INTELLIJ_WORD_BOUNDARY_BONUS: f64 = 0.85;
-const INTELLIJ_ABBREVIATION_BONUS: f64 = 1.2;
+const INTELLIJ_ABBREVIATION_BONUS: f64 = 3.0;  // Basic abbreviation bonus
 const INTELLIJ_CONSECUTIVE_BONUS: f64 = 1.1;
+const INTELLIJ_PERFECT_ABBREVIATION_BONUS: f64 = 20.0;  // For consecutive camelCase abbreviations
+const INTELLIJ_EXTENDED_ABBREVIATION_BONUS: f64 = 25.0;  // For abbreviation + exact remainder
+const INTELLIJ_START_OF_FILENAME_BONUS: f64 = 3.0;  // Extra bonus for abbreviations starting at filename
+const INTELLIJ_HYBRID_MATCH_BONUS: f64 = 8.0;  // For abbreviation + fuzzy remainder
+const INTELLIJ_SCATTERED_MATCH_PENALTY: f64 = 0.1;  // Penalty for scattered non-consecutive matches
 
 // TODO:
 // Use `Path` instead of `&str` for paths.
@@ -293,20 +307,56 @@ impl<'a> Matcher<'a> {
                             }
 
                             // Check for abbreviation matching in IntelliJ mode
-                            if Self::is_abbreviation_match(
+                            let (match_type, _abbrev_length, is_at_filename_start) = Self::analyze_abbreviation_pattern(
                                 &self.query,
                                 &self.lowercase_query,
                                 query_idx,
                                 prefix,
                                 path,
                                 j_regular
-                            ) {
-                                char_score *= INTELLIJ_ABBREVIATION_BONUS;
+                            );
+
+                            match match_type {
+                                AbbreviationMatchType::ExtendedAbbreviation => {
+                                    char_score *= INTELLIJ_EXTENDED_ABBREVIATION_BONUS;
+                                    if is_at_filename_start {
+                                        char_score *= INTELLIJ_START_OF_FILENAME_BONUS;
+                                    }
+                                },
+                                AbbreviationMatchType::PerfectAbbreviation => {
+                                    char_score *= INTELLIJ_PERFECT_ABBREVIATION_BONUS;
+                                    if is_at_filename_start {
+                                        char_score *= INTELLIJ_START_OF_FILENAME_BONUS;
+                                    }
+                                },
+                                AbbreviationMatchType::HybridMatch => {
+                                    char_score *= INTELLIJ_HYBRID_MATCH_BONUS;
+                                    if is_at_filename_start {
+                                        char_score *= INTELLIJ_START_OF_FILENAME_BONUS;
+                                    }
+                                },
+                                AbbreviationMatchType::BasicAbbreviation => {
+                                    char_score *= INTELLIJ_ABBREVIATION_BONUS;
+                                },
+                                AbbreviationMatchType::None => {
+                                    // Apply penalty for scattered matches when no abbreviation pattern found
+                                    // This helps prioritize clean abbreviations over random substring matches
+                                    if query_idx > 2 { // Only for longer patterns
+                                        char_score *= INTELLIJ_SCATTERED_MATCH_PENALTY;
+                                    }
+                                }
                             }
 
-                            // Consecutive character bonus
+                            // Consecutive character bonus - stronger for abbreviations
                             if query_idx > 0 && j == path_idx {
-                                char_score *= INTELLIJ_CONSECUTIVE_BONUS;
+                                match match_type {
+                                    AbbreviationMatchType::ExtendedAbbreviation | AbbreviationMatchType::PerfectAbbreviation => {
+                                        char_score *= INTELLIJ_CONSECUTIVE_BONUS * 1.5; // Extra bonus for strong abbreviations
+                                    },
+                                    _ => {
+                                        char_score *= INTELLIJ_CONSECUTIVE_BONUS;
+                                    }
+                                }
                             }
                         },
                         FuzzyMatchingAlgorithm::Zed => {
@@ -388,19 +438,15 @@ impl<'a> Matcher<'a> {
         score
     }
 
-    fn is_abbreviation_match(
+    fn analyze_abbreviation_pattern(
         query: &[char],
         _lowercase_query: &[char],
         query_idx: usize,
         prefix: &[char],
         path: &[char],
         current_pos: usize,
-    ) -> bool {
-        // Simple abbreviation detection: check if we're at the start of a word
-        // and if the next few query characters match word boundaries
-        if query_idx == 0 || query_idx >= query.len().saturating_sub(1) {
-            return false;
-        }
+    ) -> (AbbreviationMatchType, usize, bool) {
+        // Returns (match_type, abbreviation_length, is_at_filename_start)
 
         let get_char_at = |pos: usize| -> Option<char> {
             if pos < prefix.len() {
@@ -410,41 +456,244 @@ impl<'a> Matcher<'a> {
             }
         };
 
-        // Check if current position is at word boundary (camelCase or separator)
-        if current_pos > 0 {
-            if let Some(prev_char) = get_char_at(current_pos - 1) {
-                if let Some(curr_char) = get_char_at(current_pos) {
-                    if !(prev_char.is_lowercase() && curr_char.is_uppercase() ||
-                         prev_char == '/' || prev_char == '_' || prev_char == '-') {
-                        return false;
-                    }
+        // Check if we're at the start of the filename
+        let is_at_filename_start = {
+            let full_path_chars: Vec<char> = prefix.iter().chain(path.iter()).copied().collect();
+            if let Some(last_slash_pos) = full_path_chars.iter().rposition(|&c| c == '/') {
+                current_pos == last_slash_pos + 1
+            } else {
+                current_pos == 0
+            }
+        };
+
+        // Must be at a word boundary for abbreviation
+        let at_word_boundary = if current_pos == 0 {
+            true
+        } else {
+            if let (Some(prev_char), Some(curr_char)) = (get_char_at(current_pos - 1), get_char_at(current_pos)) {
+                prev_char.is_lowercase() && curr_char.is_uppercase() ||
+                prev_char == '/' || prev_char == '_' || prev_char == '-' || prev_char == '.'
+            } else {
+                false
+            }
+        };
+
+        if !at_word_boundary {
+            return (AbbreviationMatchType::None, 0, false);
+        }
+
+        let remaining_query = &query[query_idx..];
+        if remaining_query.is_empty() {
+            return (AbbreviationMatchType::None, 0, false);
+        }
+
+        // Try to find the longest possible abbreviation match
+        let mut best_abbreviation_length = 0;
+        let mut best_match_type = AbbreviationMatchType::None;
+
+        // Try different abbreviation lengths, starting from the longest possible
+        for abbrev_len in (1..=remaining_query.len()).rev() {
+            let abbreviation_part = &remaining_query[..abbrev_len];
+            let remainder_part = &remaining_query[abbrev_len..];
+
+            if let Some((abbreviation_end_pos, camel_matches, consecutive_score)) = Self::try_match_abbreviation(
+                abbreviation_part,
+                prefix,
+                path,
+                current_pos,
+                &get_char_at
+            ) {
+                if camel_matches >= 2 || (camel_matches >= 1 && abbreviation_part.len() >= 2) {
+                    // Found a valid abbreviation, now check what kind of match this is
+                    let match_type = if remainder_part.is_empty() {
+                        // Pure abbreviation (e.g., "SCS" -> "SimulatedChatService")
+                        // Factor in consecutive score for better classification
+                        if camel_matches >= (abbreviation_part.len() as f32 * 0.8) as usize && consecutive_score >= 4 {
+                            AbbreviationMatchType::PerfectAbbreviation
+                        } else {
+                            AbbreviationMatchType::BasicAbbreviation
+                        }
+                    } else {
+                        // Abbreviation + remainder (e.g., "SCService" -> "SCS" + "ervice")
+                        if Self::check_exact_remainder_match(
+                            remainder_part,
+                            prefix,
+                            path,
+                            abbreviation_end_pos,
+                            &get_char_at
+                        ) {
+                            // Factor in consecutive score for extended abbreviations too
+                            if consecutive_score >= 2 {
+                                AbbreviationMatchType::ExtendedAbbreviation
+                            } else {
+                                AbbreviationMatchType::HybridMatch
+                            }
+                        } else {
+                            AbbreviationMatchType::HybridMatch
+                        }
+                    };
+
+                    // Take the first valid match (longest abbreviation)
+                    best_abbreviation_length = abbrev_len;
+                    best_match_type = match_type;
+                    break;
                 }
             }
         }
 
-        // Look ahead to see if next query chars match word starts
-        let mut remaining_query = query_idx + 1;
-        let mut search_pos = current_pos + 1;
-        let max_search = (prefix.len() + path.len()).min(search_pos + 20); // Limit search window
+        (best_match_type, best_abbreviation_length, is_at_filename_start)
+    }
 
-        while remaining_query < query.len() && search_pos < max_search {
+    fn try_match_abbreviation(
+        abbreviation: &[char],
+        prefix: &[char],
+        path: &[char],
+        start_pos: usize,
+        get_char_at: &impl Fn(usize) -> Option<char>,
+    ) -> Option<(usize, usize, usize)> {
+        // Returns (end_position, camel_case_matches, consecutive_score)
+        let mut query_pos = 0;
+        let mut search_pos = start_pos;
+        let max_search = prefix.len() + path.len();
+        let mut camel_matches = 0;
+        let mut consecutive_camel_score = 0;
+        let mut last_match_pos = None;
+
+        while query_pos < abbreviation.len() && search_pos < max_search {
             if let Some(search_char) = get_char_at(search_pos) {
-                if search_char.to_lowercase().next() == Some(query[remaining_query].to_lowercase().next().unwrap_or('\0')) {
-                    // Check if this is at a word boundary
-                    if search_pos > 0 {
-                        if let Some(prev_char) = get_char_at(search_pos - 1) {
-                            if prev_char.is_lowercase() && search_char.is_uppercase() ||
-                               prev_char == '/' || prev_char == '_' || prev_char == '-' {
-                                remaining_query += 1;
-                                if remaining_query >= query.len() - query_idx {
-                                    return true; // Found abbreviation pattern
-                                }
+                let query_char = abbreviation[query_pos];
+
+                // For abbreviations, we want exact case matching for uppercase letters
+                // and case-insensitive for lowercase query letters
+                let is_match = if query_char.is_uppercase() {
+                    // Uppercase query char must match uppercase target char exactly
+                    search_char == query_char
+                } else {
+                    // Lowercase query char can match case-insensitively
+                    search_char.to_lowercase().next() == Some(query_char.to_lowercase().next().unwrap_or('\0'))
+                };
+
+                if is_match {
+                    // Check if this is a camelCase boundary (required for good abbreviations)
+                    let is_camel_boundary = if search_pos == 0 {
+                        search_char.is_uppercase()
+                    } else if let Some(prev_char) = get_char_at(search_pos - 1) {
+                        prev_char.is_lowercase() && search_char.is_uppercase()
+                    } else {
+                        false
+                    };
+
+                    // For uppercase query chars, we require camelCase boundaries
+                    if query_char.is_uppercase() && !is_camel_boundary {
+                        search_pos += 1;
+                        continue;
+                    }
+
+                    if is_camel_boundary {
+                        camel_matches += 1;
+
+                        // Check for consecutive matches (higher score)
+                        if let Some(last_pos) = last_match_pos {
+                            if search_pos <= last_pos + 20 { // Reasonable proximity
+                                consecutive_camel_score += 2;
                             }
                         }
+                        last_match_pos = Some(search_pos);
                     }
+
+                    query_pos += 1;
+
+                    if query_pos < abbreviation.len() {
+                        search_pos += 1;
+                        // Look for next camelCase boundary
+                        while search_pos < max_search && search_pos - start_pos < 50 {
+                            if let Some(next_char) = get_char_at(search_pos) {
+                                // For the next character in query
+                                let next_query_char = abbreviation[query_pos];
+
+                                if search_pos > 0 {
+                                    if let Some(prev_char) = get_char_at(search_pos - 1) {
+                                        let at_camel_boundary = prev_char.is_lowercase() && next_char.is_uppercase();
+                                        let at_separator = prev_char == '/' || prev_char == '_' || prev_char == '-';
+
+                                        // If next query char is uppercase, we need a camelCase boundary
+                                        if next_query_char.is_uppercase() {
+                                            if at_camel_boundary || at_separator || next_char == next_query_char {
+                                                break;
+                                            }
+                                        } else {
+                                            // For lowercase, be more flexible
+                                            if at_camel_boundary || at_separator ||
+                                               next_char.to_lowercase().next() == Some(next_query_char.to_lowercase().next().unwrap_or('\0')) {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                search_pos += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                    } else {
+                        // Found all abbreviation characters
+                        return Some((search_pos, camel_matches, consecutive_camel_score));
+                    }
+                } else {
+                    search_pos += 1;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if query_pos >= abbreviation.len() {
+            Some((search_pos, camel_matches, consecutive_camel_score))
+        } else {
+            None
+        }
+    }
+
+    fn check_exact_remainder_match(
+        remainder: &[char],
+        _prefix: &[char],
+        _path: &[char],
+        start_pos: usize,
+        get_char_at: &impl Fn(usize) -> Option<char>,
+    ) -> bool {
+        // Check if remainder matches exactly at start_pos
+        // For "ervice", we want to match lowercase letters in "Service"
+
+        for offset in 0..10 { // Check a few positions after abbreviation end
+            let check_pos = start_pos + offset;
+            let mut matches = 0;
+
+            for (i, &expected_char) in remainder.iter().enumerate() {
+                if let Some(actual_char) = get_char_at(check_pos + i) {
+                    // Case-sensitive matching for remainder
+                    // If remainder char is lowercase, target should be lowercase too
+                    // If remainder char is uppercase, target should be uppercase too
+                    let is_match = if expected_char.is_uppercase() {
+                        actual_char == expected_char
+                    } else {
+                        // For lowercase remainder, we want it to match the lowercase portion
+                        // of the word, not the uppercase beginning
+                        actual_char.is_lowercase() && actual_char == expected_char
+                    };
+
+                    if is_match {
+                        matches += 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
                 }
             }
-            search_pos += 1;
+
+            if matches == remainder.len() {
+                return true;
+            }
         }
 
         false

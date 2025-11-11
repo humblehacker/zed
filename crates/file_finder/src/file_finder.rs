@@ -692,17 +692,18 @@ impl Matches {
         if let Some(filename) = panel_match.0.path.file_name() {
             let path_str = panel_match.0.path.as_unix_str();
 
-            if let Some(filename_pos) = path_str.rfind(filename)
-                && panel_match.0.positions[0] >= filename_pos
-            {
-                let mut prev_position = panel_match.0.positions[0];
-                for p in &panel_match.0.positions[1..] {
-                    if *p != prev_position + 1 {
-                        return false;
-                    }
-                    prev_position = *p;
-                }
-                return true;
+            if let Some(filename_pos) = path_str.rfind(filename) {
+                // Check if any of the match positions are in the filename
+                // (more lenient than requiring all positions to be consecutive)
+                let filename_matches = panel_match.0.positions.iter()
+                    .filter(|&&pos| pos >= filename_pos)
+                    .count();
+
+                // Consider it a filename match if at least half the positions are in the filename
+                // or if the first position is in the filename (indicating the match starts there)
+                return filename_matches > 0 &&
+                       (filename_matches >= panel_match.0.positions.len() / 2 ||
+                        panel_match.0.positions[0] >= filename_pos);
             }
         }
 
@@ -714,18 +715,62 @@ impl Matches {
             return panel_match.0.positions.len();
         }
 
+        let path_str = panel_match.0.path.as_unix_str();
+        let path_chars: Vec<char> = path_str.chars().collect();
+
         let mut consecutive_count = 1;
         let mut max_consecutive = 1;
+        let mut camel_case_run = 1; // Count of camelCase boundaries hit
 
         for window in panel_match.0.positions.windows(2) {
-            if window[1] == window[0] + 1 {
+            let pos1 = window[0];
+            let pos2 = window[1];
+
+            if pos2 == pos1 + 1 {
+                // Truly consecutive characters
                 consecutive_count += 1;
             } else {
-                max_consecutive = max_consecutive.max(consecutive_count);
-                consecutive_count = 1;
+                // Check if this is a camelCase abbreviation pattern
+                // (e.g., 'S' to 'C' in "SimulatedChatService")
+                if pos1 < path_chars.len() && pos2 < path_chars.len() {
+                    let char1 = path_chars[pos1];
+                    let char2 = path_chars[pos2];
+
+                    // If both are uppercase and at word boundaries, treat as consecutive for abbreviations
+                    if char1.is_uppercase() && char2.is_uppercase() {
+                        if pos1 > 0 && pos2 > 0 {
+                            let prev_char1 = path_chars[pos1 - 1];
+                            let prev_char2 = path_chars[pos2 - 1];
+                            if prev_char1.is_lowercase() && prev_char2.is_lowercase() {
+                                camel_case_run += 1;
+                                consecutive_count += 1; // Treat as consecutive for scoring
+                            } else {
+                                max_consecutive = max_consecutive.max(consecutive_count);
+                                consecutive_count = 1;
+                            }
+                        } else {
+                            camel_case_run += 1;
+                            consecutive_count += 1;
+                        }
+                    } else {
+                        max_consecutive = max_consecutive.max(consecutive_count);
+                        consecutive_count = 1;
+                    }
+                } else {
+                    max_consecutive = max_consecutive.max(consecutive_count);
+                    consecutive_count = 1;
+                }
             }
         }
-        max_consecutive.max(consecutive_count)
+
+        let final_consecutive = max_consecutive.max(consecutive_count);
+
+        // Bonus for camelCase abbreviations
+        if camel_case_run >= 2 {
+            final_consecutive + camel_case_run
+        } else {
+            final_consecutive
+        }
     }
 }
 
