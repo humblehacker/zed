@@ -331,6 +331,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                         10000,
                         &Default::default(),
                         executor,
+                        false,
                     )
                     .await
                 };

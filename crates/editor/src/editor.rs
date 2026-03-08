@@ -21225,6 +21225,7 @@ fn snippet_completions(
                 MAX_RESULTS,
                 &Default::default(),
                 executor.clone(),
+                false,
             )
             .await;
 

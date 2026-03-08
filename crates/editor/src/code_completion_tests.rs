@@ -311,6 +311,7 @@ async fn filter_and_sort_matches(
         100,
         &cancel_flag,
         background_executor,
+        false,
     )
     .await;
     CompletionsMenu::sort_string_matches(matches, Some(query), snippet_sort_order, &completions)

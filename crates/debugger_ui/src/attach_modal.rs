@@ -187,6 +187,7 @@ impl PickerDelegate for AttachModalDelegate {
                 100,
                 &Default::default(),
                 cx.background_executor().clone(),
+                false,
             )
             .await;
 

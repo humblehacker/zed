@@ -478,6 +478,7 @@ impl ExtensionsPage {
                     match_candidates.len(),
                     &Default::default(),
                     cx.background_executor().clone(),
+                    false,
                 )
                 .await;
                 matches

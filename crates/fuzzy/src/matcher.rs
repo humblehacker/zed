@@ -18,6 +18,7 @@ pub struct Matcher<'a> {
     query_char_bag: CharBag,
     smart_case: bool,
     penalize_length: bool,
+    word_boundary_boost: bool,
     min_score: f64,
     match_positions: Vec<usize>,
     last_positions: Vec<usize>,
@@ -37,6 +38,7 @@ impl<'a> Matcher<'a> {
         query_char_bag: CharBag,
         smart_case: bool,
         penalize_length: bool,
+        word_boundary_boost: bool,
     ) -> Self {
         Self {
             query,
@@ -49,6 +51,7 @@ impl<'a> Matcher<'a> {
             best_position_matrix: Vec::new(),
             smart_case,
             penalize_length,
+            word_boundary_boost,
         }
     }
 
@@ -162,9 +165,15 @@ impl<'a> Matcher<'a> {
             return 0.0;
         }
         let path_len = prefix.len() + path.len();
+        let filename_start_char = path
+            .iter()
+            .rposition(|c| *c == std::path::MAIN_SEPARATOR)
+            .map(|i| prefix.len() + i + 1)
+            .unwrap_or(prefix.len());
         let mut cur_start = 0;
         let mut byte_ix = 0;
         let mut char_ix = 0;
+        let mut filename_match_count = 0usize;
         for i in 0..self.query.len() {
             let match_char_ix = self.best_position_matrix[i * path_len + cur_start];
             while char_ix < match_char_ix {
@@ -178,6 +187,10 @@ impl<'a> Matcher<'a> {
 
             self.match_positions[i] = byte_ix;
 
+            if match_char_ix >= filename_start_char {
+                filename_match_count += 1;
+            }
+
             let matched_ch = prefix
                 .get(match_char_ix)
                 .or_else(|| path.get(match_char_ix - prefix.len()))
@@ -186,6 +199,11 @@ impl<'a> Matcher<'a> {
 
             cur_start = match_char_ix + 1;
             char_ix = match_char_ix + 1;
+        }
+
+        if self.word_boundary_boost && !self.query.is_empty() {
+            let filename_ratio = filename_match_count as f64 / self.query.len() as f64;
+            return score * (1.0 + filename_ratio * 0.5);
         }
 
         score
@@ -269,11 +287,15 @@ impl<'a> Matcher<'a> {
                         path[j_regular - 1 - prefix.len()]
                     };
 
+                    let is_word_boundary =
+                        (last == '-' || last == '_' || last == ' ' || last.is_numeric())
+                            || (last.is_lowercase() && curr.is_uppercase());
+
                     if last == MAIN_SEPARATOR {
                         char_score = 0.9;
-                    } else if (last == '-' || last == '_' || last == ' ' || last.is_numeric())
-                        || (last.is_lowercase() && curr.is_uppercase())
-                    {
+                    } else if is_word_boundary && self.word_boundary_boost {
+                        char_score = 0.85;
+                    } else if is_word_boundary {
                         char_score = 0.8;
                     } else if last == '.' {
                         char_score = 0.7;
@@ -358,18 +380,18 @@ mod tests {
     #[test]
     fn test_get_last_positions() {
         let mut query: &[char] = &['d', 'c'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, false);
         let result = matcher.find_last_positions(&['a', 'b', 'c'], &['b', 'd', 'e', 'f']);
         assert!(!result);
 
         query = &['c', 'd'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, false);
         let result = matcher.find_last_positions(&['a', 'b', 'c'], &['b', 'd', 'e', 'f']);
         assert!(result);
         assert_eq!(matcher.last_positions, vec![2, 4]);
 
         query = &['z', '/', 'z', 'f'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, false);
         let result = matcher.find_last_positions(&['z', 'e', 'd', '/'], &['z', 'e', 'd', '/', 'f']);
         assert!(result);
         assert_eq!(matcher.last_positions, vec![0, 3, 4, 8]);
@@ -592,6 +614,151 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_word_boundary_boost_camel_case() {
+        let paths = vec![
+            "src/SimulatedChatService.rs",
+            "src/SCSManager.rs",
+        ];
+
+        let results = match_single_path_query_scored("SCS", false, true, &paths);
+        assert_eq!(results.len(), 2);
+
+        let scs_manager_score = results
+            .iter()
+            .find(|(p, _, _)| p.contains("SCSManager"))
+            .map(|(_, _, s)| *s)
+            .expect("SCSManager should match");
+        let simulated_score = results
+            .iter()
+            .find(|(p, _, _)| p.contains("SimulatedChatService"))
+            .map(|(_, _, s)| *s)
+            .expect("SimulatedChatService should match");
+
+        assert!(
+            simulated_score > scs_manager_score * 0.3,
+            "Hump match score ({simulated_score}) should be within 3x of prefix match ({scs_manager_score})"
+        );
+    }
+
+    #[test]
+    fn test_word_boundary_boost_hybrid_hump_prefix() {
+        let paths = vec![
+            "src/SimulatedChatService.rs",
+            "src/SomeOtherFile.rs",
+        ];
+
+        let results = match_single_path_query_scored("SCService", false, true, &paths);
+        let simulated = results
+            .iter()
+            .find(|(p, _, _)| p.contains("SimulatedChatService"));
+        assert!(
+            simulated.is_some(),
+            "SCService should match SimulatedChatService"
+        );
+    }
+
+    #[test]
+    fn test_word_boundary_boost_snake_case() {
+        let paths = vec![
+            "src/simulated_chat_service.rs",
+            "src/simulated-chat-service.rs",
+        ];
+
+        let results = match_single_path_query_scored("scs", false, true, &paths);
+        assert_eq!(results.len(), 2, "scs should match both snake_case and kebab-case");
+    }
+
+    #[test]
+    fn test_word_boundary_boost_prefix_still_wins() {
+        let paths = vec![
+            "src/SimulatedChatService.rs",
+            "src/SCSManager.rs",
+        ];
+
+        let results = match_single_path_query_scored("SCS", false, true, &paths);
+        let scs_manager_score = results
+            .iter()
+            .find(|(p, _, _)| p.contains("SCSManager"))
+            .map(|(_, _, s)| *s)
+            .expect("SCSManager should match");
+        let simulated_score = results
+            .iter()
+            .find(|(p, _, _)| p.contains("SimulatedChatService"))
+            .map(|(_, _, s)| *s)
+            .expect("SimulatedChatService should match");
+
+        assert!(
+            scs_manager_score > simulated_score,
+            "Consecutive prefix match ({scs_manager_score}) should still beat hump match ({simulated_score})"
+        );
+    }
+
+    fn match_single_path_query_scored<'a>(
+        query: &str,
+        smart_case: bool,
+        word_boundary_boost: bool,
+        paths: &[&'a str],
+    ) -> Vec<(&'a str, Vec<usize>, f64)> {
+        let lowercase_query = query.to_lowercase().chars().collect::<Vec<_>>();
+        let query = query.chars().collect::<Vec<_>>();
+        let query_chars = CharBag::from(&lowercase_query[..]);
+
+        let path_arcs: Vec<Arc<Path>> = paths
+            .iter()
+            .map(|path| Arc::from(PathBuf::from(path)))
+            .collect::<Vec<_>>();
+        let mut path_entries = Vec::new();
+        for (i, path) in paths.iter().enumerate() {
+            let lowercase_path = path.to_lowercase().chars().collect::<Vec<_>>();
+            let char_bag = CharBag::from(lowercase_path.as_slice());
+            path_entries.push(PathMatchCandidate {
+                is_dir: false,
+                char_bag,
+                path: &path_arcs[i],
+            });
+        }
+
+        let mut matcher =
+            Matcher::new(&query, &lowercase_query, query_chars, smart_case, true, word_boundary_boost);
+
+        let cancel_flag = AtomicBool::new(false);
+        let mut results = Vec::new();
+
+        matcher.match_candidates(
+            &[],
+            &[],
+            path_entries.into_iter(),
+            &mut results,
+            &cancel_flag,
+            |candidate, score, positions| PathMatch {
+                score,
+                worktree_id: 0,
+                positions: positions.clone(),
+                path: Arc::from(candidate.path),
+                path_prefix: "".into(),
+                distance_to_relative_ancestor: usize::MAX,
+                is_dir: false,
+            },
+        );
+        results.sort_by(|a, b| b.cmp(a));
+
+        results
+            .into_iter()
+            .map(|result| {
+                (
+                    paths
+                        .iter()
+                        .copied()
+                        .find(|p| result.path.as_ref() == Path::new(p))
+                        .unwrap(),
+                    result.positions,
+                    result.score,
+                )
+            })
+            .collect()
+    }
+
     fn match_single_path_query<'a>(
         query: &str,
         smart_case: bool,
@@ -616,7 +783,7 @@ mod tests {
             });
         }
 
-        let mut matcher = Matcher::new(&query, &lowercase_query, query_chars, smart_case, true);
+        let mut matcher = Matcher::new(&query, &lowercase_query, query_chars, smart_case, true, false);
 
         let cancel_flag = AtomicBool::new(false);
         let mut results = Vec::new();

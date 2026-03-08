@@ -445,6 +445,7 @@ impl PartialOrd for ProjectPanelOrdMatch {
 #[derive(Debug, Default)]
 struct Matches {
     separate_history: bool,
+    improved_matching: bool,
     matches: Vec<Match>,
 }
 
@@ -530,7 +531,7 @@ impl Matches {
             self.matches.binary_search_by(|m| {
                 // `reverse()` since if cmp_matches(a, b) == Ordering::Greater, then a is better than b.
                 // And we want the better entries go first.
-                Self::cmp_matches(self.separate_history, currently_opened, &m, &entry).reverse()
+                Self::cmp_matches(self.separate_history, self.improved_matching, currently_opened, &m, &entry).reverse()
             })
         }
     }
@@ -597,6 +598,7 @@ impl Matches {
     /// If a < b, then a is a worse match, aligning with the `ProjectPanelOrdMatch` ordering.
     fn cmp_matches(
         separate_history: bool,
+        improved_matching: bool,
         currently_opened: Option<&FoundPath>,
         a: &Match,
         b: &Match,
@@ -646,8 +648,8 @@ impl Matches {
             None => return cmp::Ordering::Greater,
         };
 
-        let a_in_filename = Self::is_filename_match(a_panel_match);
-        let b_in_filename = Self::is_filename_match(b_panel_match);
+        let a_in_filename = Self::is_filename_match(a_panel_match, improved_matching);
+        let b_in_filename = Self::is_filename_match(b_panel_match, improved_matching);
 
         match (a_in_filename, b_in_filename) {
             (true, false) => return cmp::Ordering::Greater,
@@ -659,7 +661,7 @@ impl Matches {
     }
 
     /// Determines if the match occurred within the filename rather than in the path
-    fn is_filename_match(panel_match: &ProjectPanelOrdMatch) -> bool {
+    fn is_filename_match(panel_match: &ProjectPanelOrdMatch, improved_matching: bool) -> bool {
         if panel_match.0.positions.is_empty() {
             return false;
         }
@@ -670,6 +672,9 @@ impl Matches {
 
             if let Some(filename_pos) = path_str.rfind(&*filename_str) {
                 if panel_match.0.positions[0] >= filename_pos {
+                    if improved_matching {
+                        return panel_match.0.positions.iter().all(|p| *p >= filename_pos);
+                    }
                     let mut prev_position = panel_match.0.positions[0];
                     for p in &panel_match.0.positions[1..] {
                         if *p != prev_position + 1 {
@@ -736,6 +741,7 @@ fn matching_history_items<'a>(
                 query.path_query(),
                 false,
                 max_results,
+                false,
             )
             .into_iter()
             .filter_map(|path_match| {
@@ -881,23 +887,54 @@ impl FileFinderDelegate {
             })
             .collect::<Vec<_>>();
 
+        let improved_matching = FileFinderSettings::get_global(cx).improved_matching;
         let search_id = util::post_inc(&mut self.search_count);
         self.cancel_flag.store(true, atomic::Ordering::Relaxed);
         self.cancel_flag = Arc::new(AtomicBool::new(false));
         let cancel_flag = self.cancel_flag.clone();
         cx.spawn_in(window, async move |picker, cx| {
-            let matches = fuzzy::match_path_sets(
-                candidate_sets.as_slice(),
-                query.path_query(),
-                relative_to,
-                false,
-                100,
-                &cancel_flag,
-                cx.background_executor().clone(),
-            )
-            .await
-            .into_iter()
-            .map(ProjectPanelOrdMatch);
+            let path_query = query.path_query().to_string();
+            let tokens: Vec<&str> = if improved_matching {
+                path_query.split_whitespace().collect()
+            } else {
+                vec![&path_query]
+            };
+
+            let matches = if tokens.len() <= 1 {
+                fuzzy::match_path_sets(
+                    candidate_sets.as_slice(),
+                    &path_query,
+                    relative_to,
+                    false,
+                    100,
+                    &cancel_flag,
+                    cx.background_executor().clone(),
+                    improved_matching,
+                )
+                .await
+            } else {
+                let mut token_results: Vec<Vec<PathMatch>> = Vec::new();
+                for token in &tokens {
+                    if cancel_flag.load(atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    let result = fuzzy::match_path_sets(
+                        candidate_sets.as_slice(),
+                        token,
+                        relative_to.clone(),
+                        false,
+                        1000,
+                        &cancel_flag,
+                        cx.background_executor().clone(),
+                        improved_matching,
+                    )
+                    .await;
+                    token_results.push(result);
+                }
+                Self::intersect_token_results(token_results)
+            };
+
+            let matches = matches.into_iter().map(ProjectPanelOrdMatch);
             let did_cancel = cancel_flag.load(atomic::Ordering::Relaxed);
             picker
                 .update(cx, |picker, cx| {
@@ -907,6 +944,62 @@ impl FileFinderDelegate {
                 })
                 .log_err();
         })
+    }
+
+    fn intersect_token_results(token_results: Vec<Vec<PathMatch>>) -> Vec<PathMatch> {
+        if token_results.is_empty() {
+            return Vec::new();
+        }
+        if token_results.len() == 1 {
+            return token_results.into_iter().next().unwrap_or_default();
+        }
+
+        let mut score_map: HashMap<(usize, Arc<Path>), (f64, Vec<usize>)> = HashMap::default();
+        for path_match in &token_results[0] {
+            let key = (path_match.worktree_id, Arc::clone(&path_match.path));
+            score_map.insert(key, (path_match.score, path_match.positions.clone()));
+        }
+
+        for results in &token_results[1..] {
+            let current_keys: HashMap<(usize, Arc<Path>), &PathMatch> = results
+                .iter()
+                .map(|m| ((m.worktree_id, Arc::clone(&m.path)), m))
+                .collect();
+
+            score_map.retain(|key, (score, positions)| {
+                if let Some(m) = current_keys.get(key) {
+                    *score += m.score;
+                    positions.extend_from_slice(&m.positions);
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+
+        let first_results = &token_results[0];
+        let mut results: Vec<PathMatch> = first_results
+            .iter()
+            .filter_map(|m| {
+                let key = (m.worktree_id, Arc::clone(&m.path));
+                score_map.remove(&key).map(|(score, mut positions)| {
+                    positions.sort();
+                    positions.dedup();
+                    PathMatch {
+                        score,
+                        positions,
+                        worktree_id: m.worktree_id,
+                        path: Arc::clone(&m.path),
+                        path_prefix: Arc::clone(&m.path_prefix),
+                        distance_to_relative_ancestor: m.distance_to_relative_ancestor,
+                        is_dir: m.is_dir,
+                    }
+                })
+            })
+            .collect();
+        results.sort_by(|a, b| b.cmp(a));
+        results.truncate(100);
+        results
     }
 
     fn set_search_matches(
@@ -1291,7 +1384,12 @@ impl PickerDelegate for FileFinderDelegate {
         window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     ) -> Task<()> {
-        let raw_query = raw_query.replace(' ', "");
+        let improved_matching = FileFinderSettings::get_global(cx).improved_matching;
+        let raw_query = if improved_matching {
+            raw_query
+        } else {
+            raw_query.replace(' ', "")
+        };
         let raw_query = raw_query.trim();
 
         let raw_query = match &raw_query.get(0..2) {
@@ -1346,6 +1444,7 @@ impl PickerDelegate for FileFinderDelegate {
                 self.latest_search_query = None;
                 self.matches = Matches {
                     separate_history: self.separate_history,
+                    improved_matching,
                     ..Matches::default()
                 };
                 self.matches.push_new_matches(

@@ -121,6 +121,7 @@ pub async fn match_strings<T>(
     max_results: usize,
     cancel_flag: &AtomicBool,
     executor: BackgroundExecutor,
+    word_boundary_boost: bool,
 ) -> Vec<StringMatch>
 where
     T: Borrow<StringMatchCandidate> + Sync,
@@ -167,6 +168,7 @@ where
                         query_char_bag,
                         smart_case,
                         penalize_length,
+                        word_boundary_boost,
                     );
 
                     matcher.match_candidates(

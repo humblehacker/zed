@@ -219,6 +219,7 @@ impl IndexedDocsStore {
                 100,
                 &AtomicBool::default(),
                 executor,
+                false,
             )
             .await;
 

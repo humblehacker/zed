@@ -255,6 +255,7 @@ impl PickerDelegate for RecentProjectsDelegate {
             100,
             &Default::default(),
             cx.background_executor().clone(),
+            false,
         ));
         self.matches.sort_unstable_by_key(|m| m.candidate_id);
 

@@ -66,6 +66,7 @@ impl SlashCommandCompletionProvider {
                 usize::MAX,
                 &Default::default(),
                 cx.background_executor().clone(),
+                false,
             )
             .await;
 

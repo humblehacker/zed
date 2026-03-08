@@ -1692,9 +1692,9 @@ async fn test_non_separate_history_items(cx: &mut TestAppContext) {
         assert_eq!(finder.delegate.matches.len(), 6);
         assert_match_at_position(finder, 0, "main.rs");
         assert_match_selection(finder, 1, "moo.rs");
-        assert_match_at_position(finder, 2, "bar.rs");
-        assert_match_at_position(finder, 3, "lib.rs");
-        assert_match_at_position(finder, 4, "maaa.rs");
+        assert_match_at_position(finder, 2, "maaa.rs");
+        assert_match_at_position(finder, 3, "bar.rs");
+        assert_match_at_position(finder, 4, "lib.rs");
         assert_match_at_position(finder, 5, ".rs");
     });
 

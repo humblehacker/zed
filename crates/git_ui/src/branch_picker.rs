@@ -309,6 +309,7 @@ impl PickerDelegate for BranchListDelegate {
                     10000,
                     &Default::default(),
                     cx.background_executor().clone(),
+                    false,
                 )
                 .await
                 .into_iter()

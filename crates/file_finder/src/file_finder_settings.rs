@@ -9,6 +9,7 @@ pub struct FileFinderSettings {
     pub modal_max_width: Option<FileFinderWidth>,
     pub skip_focus_for_active_in_search: bool,
     pub include_ignored: Option<bool>,
+    pub improved_matching: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, JsonSchema, Debug)]
@@ -39,6 +40,12 @@ pub struct FileFinderSettingsContent {
     ///
     /// Default: None
     pub include_ignored: Option<Option<bool>>,
+    /// Whether to use improved fuzzy matching that better handles CamelCase,
+    /// snake_case, and kebab-case word boundary matching, and supports
+    /// space-separated multi-token queries.
+    ///
+    /// Default: true
+    pub improved_matching: Option<bool>,
 }
 
 impl Settings for FileFinderSettings {

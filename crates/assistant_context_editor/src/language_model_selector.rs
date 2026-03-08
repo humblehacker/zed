@@ -314,6 +314,7 @@ impl ModelMatcher {
             100,
             &Default::default(),
             self.bg_executor.clone(),
+            false,
         ));
 
         let sorting_key = |mat: &StringMatch| {

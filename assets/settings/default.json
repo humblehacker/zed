@@ -983,7 +983,11 @@
     //   * `true`: Use all gitignored files
     //   * `false`: Use only the files Zed had indexed
     //   * `null`: Be smart and search for ignored when called from a gitignored worktree
-    "include_ignored": null
+    "include_ignored": null,
+    // Whether to use improved fuzzy matching that better handles CamelCase,
+    // snake_case, and kebab-case word boundary matching, and supports
+    // space-separated multi-token queries.
+    "improved_matching": true
   },
   // Whether or not to remove any trailing whitespace from lines of a buffer
   // before saving it.

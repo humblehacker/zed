@@ -70,6 +70,7 @@ impl ProjectSymbolsDelegate {
             MAX_MATCHES,
             &Default::default(),
             cx.background_executor().clone(),
+            false,
         ));
         let mut external_matches = cx.background_executor().block(fuzzy::match_strings(
             &self.external_match_candidates,
@@ -79,6 +80,7 @@ impl ProjectSymbolsDelegate {
             MAX_MATCHES - visible_matches.len().min(MAX_MATCHES),
             &Default::default(),
             cx.background_executor().clone(),
+            false,
         ));
         let sort_key_for_match = |mat: &StringMatch| {
             let symbol = &self.symbols[mat.candidate_id];
@@ -348,6 +350,7 @@ mod tests {
                             100,
                             &Default::default(),
                             executor.clone(),
+                            false,
                         )
                         .await
                     };

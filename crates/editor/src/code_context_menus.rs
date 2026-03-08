@@ -983,6 +983,7 @@ impl CompletionsMenu {
                     1000,
                     &cancel_filter,
                     background_executor,
+                    false,
                 )
                 .await
             }
