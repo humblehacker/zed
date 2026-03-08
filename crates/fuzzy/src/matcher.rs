@@ -250,7 +250,20 @@ impl<'a> Matcher<'a> {
             }
             let hump_ratio = first_boundary_hits as f64 / self.query.len() as f64;
 
-            return score * (1.0 + filename_ratio * 0.5) * (1.0 + hump_ratio * 1.5);
+            // Coverage ratio: what fraction of the filename's word boundaries
+            // does the query cover? "SCS" matching 3/3 boundaries of
+            // SimulatedChatService (100%) scores higher than matching 3/5
+            // boundaries of SCSDKCoreKit (60%).
+            let coverage_ratio = if !filename_boundaries.is_empty() {
+                first_boundary_hits as f64 / filename_boundaries.len() as f64
+            } else {
+                0.0
+            };
+
+            return score
+                * (1.0 + filename_ratio * 0.5)
+                * (1.0 + hump_ratio * 1.5)
+                * (1.0 + coverage_ratio * 1.0);
         }
 
         score

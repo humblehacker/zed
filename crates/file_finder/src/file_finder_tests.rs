@@ -796,10 +796,10 @@ async fn test_ignored_root(cx: &mut TestAppContext) {
                 PathBuf::from("tracked-root/hiccup"),
                 PathBuf::from("ignored-root/height"),
                 PathBuf::from("tracked-root/height"),
-                PathBuf::from("tracked-root/heights/height_1"),
-                PathBuf::from("tracked-root/heights/height_2"),
                 PathBuf::from("ignored-root/happiness"),
                 PathBuf::from("tracked-root/happiness"),
+                PathBuf::from("tracked-root/heights/height_1"),
+                PathBuf::from("tracked-root/heights/height_2"),
             ],
             "All ignored files that were indexed are found in the turned on ignored mode"
         );
