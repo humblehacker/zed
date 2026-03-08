@@ -294,7 +294,7 @@ impl<'a> Matcher<'a> {
                     if last == MAIN_SEPARATOR {
                         char_score = 0.9;
                     } else if is_word_boundary && self.word_boundary_boost {
-                        char_score = 0.85;
+                        char_score = 1.2;
                     } else if is_word_boundary {
                         char_score = 0.8;
                     } else if last == '.' {
@@ -320,7 +320,15 @@ impl<'a> Matcher<'a> {
 
                 // Scale the score based on how deep within the path we found the match.
                 if self.penalize_length && query_idx == 0 {
-                    multiplier /= ((prefix.len() + path.len()) - last_slash) as f64;
+                    let filename_len = ((prefix.len() + path.len()) - last_slash) as f64;
+                    if self.word_boundary_boost {
+                        // Use log-based penalty to reduce the impact of filename length
+                        // on scoring, so hump matches into longer CamelCase names
+                        // aren't unfairly penalized vs shorter prefix matches.
+                        multiplier /= (1.0 + filename_len).ln();
+                    } else {
+                        multiplier /= filename_len;
+                    }
                 }
 
                 let mut next_score = 1.0;
@@ -636,8 +644,8 @@ mod tests {
             .expect("SimulatedChatService should match");
 
         assert!(
-            simulated_score > scs_manager_score * 0.3,
-            "Hump match score ({simulated_score}) should be within 3x of prefix match ({scs_manager_score})"
+            simulated_score > scs_manager_score,
+            "Hump match score ({simulated_score}) should beat prefix match ({scs_manager_score})"
         );
     }
 
@@ -670,28 +678,15 @@ mod tests {
     }
 
     #[test]
-    fn test_word_boundary_boost_prefix_still_wins() {
+    fn test_word_boundary_boost_hump_beats_prefix() {
         let paths = vec![
             "src/SimulatedChatService.rs",
             "src/SCSManager.rs",
         ];
 
         let results = match_single_path_query_scored("SCS", false, true, &paths);
-        let scs_manager_score = results
-            .iter()
-            .find(|(p, _, _)| p.contains("SCSManager"))
-            .map(|(_, _, s)| *s)
-            .expect("SCSManager should match");
-        let simulated_score = results
-            .iter()
-            .find(|(p, _, _)| p.contains("SimulatedChatService"))
-            .map(|(_, _, s)| *s)
-            .expect("SimulatedChatService should match");
-
-        assert!(
-            scs_manager_score > simulated_score,
-            "Consecutive prefix match ({scs_manager_score}) should still beat hump match ({simulated_score})"
-        );
+        assert_eq!(results[0].0, "src/SimulatedChatService.rs",
+            "Perfect hump match should rank first");
     }
 
     fn match_single_path_query_scored<'a>(
