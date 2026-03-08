@@ -557,7 +557,19 @@ impl Matches {
             return;
         };
 
-        let new_history_matches = matching_history_items(history_items, currently_opened, query);
+        let mut new_history_matches =
+            matching_history_items(history_items, currently_opened, query);
+        if self.improved_matching {
+            for m in new_history_matches.values_mut() {
+                if let Match::History {
+                    panel_match: Some(pm),
+                    ..
+                } = m
+                {
+                    pm.0.score *= 1.2;
+                }
+            }
+        }
         let new_search_matches: Vec<Match> = new_search_matches
             .filter(|path_match| !new_history_matches.contains_key(&path_match.0.path))
             .map(Match::Search)
