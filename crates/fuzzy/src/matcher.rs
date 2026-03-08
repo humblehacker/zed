@@ -174,6 +174,7 @@ impl<'a> Matcher<'a> {
         let mut byte_ix = 0;
         let mut char_ix = 0;
         let mut filename_match_count = 0usize;
+        let mut boundary_match_count = 0usize;
         for i in 0..self.query.len() {
             let match_char_ix = self.best_position_matrix[i * path_len + cur_start];
             while char_ix < match_char_ix {
@@ -191,6 +192,30 @@ impl<'a> Matcher<'a> {
                 filename_match_count += 1;
             }
 
+            if self.word_boundary_boost && match_char_ix > 0 {
+                let prev = prefix
+                    .get(match_char_ix - 1)
+                    .or_else(|| path.get(match_char_ix - 1 - prefix.len()))
+                    .copied();
+                let curr = prefix
+                    .get(match_char_ix)
+                    .or_else(|| path.get(match_char_ix - prefix.len()))
+                    .copied();
+                if let (Some(prev), Some(curr)) = (prev, curr) {
+                    let is_boundary = prev == std::path::MAIN_SEPARATOR
+                        || prev == '-'
+                        || prev == '_'
+                        || prev == ' '
+                        || prev.is_numeric()
+                        || (prev.is_lowercase() && curr.is_uppercase());
+                    if is_boundary {
+                        boundary_match_count += 1;
+                    }
+                }
+            } else if self.word_boundary_boost && match_char_ix == 0 {
+                boundary_match_count += 1;
+            }
+
             let matched_ch = prefix
                 .get(match_char_ix)
                 .or_else(|| path.get(match_char_ix - prefix.len()))
@@ -203,7 +228,8 @@ impl<'a> Matcher<'a> {
 
         if self.word_boundary_boost && !self.query.is_empty() {
             let filename_ratio = filename_match_count as f64 / self.query.len() as f64;
-            return score * (1.0 + filename_ratio * 0.5);
+            let boundary_ratio = boundary_match_count as f64 / self.query.len() as f64;
+            return score * (1.0 + filename_ratio * 0.5) * (1.0 + boundary_ratio * 1.0);
         }
 
         score
@@ -320,15 +346,7 @@ impl<'a> Matcher<'a> {
 
                 // Scale the score based on how deep within the path we found the match.
                 if self.penalize_length && query_idx == 0 {
-                    let filename_len = ((prefix.len() + path.len()) - last_slash) as f64;
-                    if self.word_boundary_boost {
-                        // Use log-based penalty to reduce the impact of filename length
-                        // on scoring, so hump matches into longer CamelCase names
-                        // aren't unfairly penalized vs shorter prefix matches.
-                        multiplier /= (1.0 + filename_len).ln();
-                    } else {
-                        multiplier /= filename_len;
-                    }
+                    multiplier /= ((prefix.len() + path.len()) - last_slash) as f64;
                 }
 
                 let mut next_score = 1.0;
