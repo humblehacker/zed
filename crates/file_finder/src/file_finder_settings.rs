@@ -1,4 +1,5 @@
 use anyhow::Result;
+use fuzzy::MatchingMode;
 use schemars::JsonSchema;
 use serde_derive::{Deserialize, Serialize};
 use settings::{Settings, SettingsSources};
@@ -9,7 +10,7 @@ pub struct FileFinderSettings {
     pub modal_max_width: Option<FileFinderWidth>,
     pub skip_focus_for_active_in_search: bool,
     pub include_ignored: Option<bool>,
-    pub improved_matching: bool,
+    pub matching_mode: FileFinderMatchingMode,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, JsonSchema, Debug)]
@@ -40,12 +41,15 @@ pub struct FileFinderSettingsContent {
     ///
     /// Default: None
     pub include_ignored: Option<Option<bool>>,
-    /// Whether to use improved fuzzy matching that better handles CamelCase,
+    /// Which fuzzy matching mode to use for file search.
+    ///
+    /// `default`: Standard Zed fuzzy matching.
+    /// `word_boundary_boosted`: Improved matching that better handles CamelCase,
     /// snake_case, and kebab-case word boundary matching, and supports
     /// space-separated multi-token queries.
     ///
-    /// Default: true
-    pub improved_matching: Option<bool>,
+    /// Default: word_boundary_boosted
+    pub matching_mode: Option<FileFinderMatchingMode>,
 }
 
 impl Settings for FileFinderSettings {
@@ -69,4 +73,21 @@ pub enum FileFinderWidth {
     Large,
     XLarge,
     Full,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileFinderMatchingMode {
+    Default,
+    #[default]
+    WordBoundaryBoosted,
+}
+
+impl From<FileFinderMatchingMode> for MatchingMode {
+    fn from(mode: FileFinderMatchingMode) -> Self {
+        match mode {
+            FileFinderMatchingMode::Default => MatchingMode::Default,
+            FileFinderMatchingMode::WordBoundaryBoosted => MatchingMode::WordBoundaryBoosted,
+        }
+    }
 }

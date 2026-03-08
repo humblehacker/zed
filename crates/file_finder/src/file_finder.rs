@@ -900,11 +900,7 @@ impl FileFinderDelegate {
             })
             .collect::<Vec<_>>();
 
-        let matching_mode = if FileFinderSettings::get_global(cx).improved_matching {
-            MatchingMode::WordBoundaryBoosted
-        } else {
-            MatchingMode::Default
-        };
+        let matching_mode = FileFinderSettings::get_global(cx).matching_mode.into();
         let search_id = util::post_inc(&mut self.search_count);
         self.cancel_flag.store(true, atomic::Ordering::Relaxed);
         self.cancel_flag = Arc::new(AtomicBool::new(false));
@@ -1028,11 +1024,7 @@ impl FileFinderDelegate {
         cx: &mut Context<Picker<Self>>,
     ) {
         if search_id >= self.latest_search_id {
-            self.matches.matching_mode = if FileFinderSettings::get_global(cx).improved_matching {
-                MatchingMode::WordBoundaryBoosted
-            } else {
-                MatchingMode::Default
-            };
+            self.matches.matching_mode = FileFinderSettings::get_global(cx).matching_mode.into();
             self.latest_search_id = search_id;
             let query_changed = Some(query.path_query())
                 != self
@@ -1406,11 +1398,7 @@ impl PickerDelegate for FileFinderDelegate {
         window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     ) -> Task<()> {
-        let matching_mode = if FileFinderSettings::get_global(cx).improved_matching {
-            MatchingMode::WordBoundaryBoosted
-        } else {
-            MatchingMode::Default
-        };
+        let matching_mode = FileFinderSettings::get_global(cx).matching_mode.into();
         let raw_query = if matching_mode == MatchingMode::WordBoundaryBoosted {
             raw_query
         } else {
