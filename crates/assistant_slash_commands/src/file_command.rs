@@ -109,7 +109,6 @@ impl FileSlashCommand {
                     100,
                     &cancellation_flag,
                     executor,
-                    false,
                 )
                 .await
             })

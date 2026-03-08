@@ -362,7 +362,6 @@ impl PickerDelegate for TasksModalDelegate {
                 1000,
                 &Default::default(),
                 cx.background_executor().clone(),
-                false,
             )
             .await;
             picker

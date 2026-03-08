@@ -148,7 +148,6 @@ impl PickerDelegate for BookmarkPickerDelegate {
                     100,
                     &Default::default(),
                     background,
-                    false,
                 )
                 .await
                 .into_iter()

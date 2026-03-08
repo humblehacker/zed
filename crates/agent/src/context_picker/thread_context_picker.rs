@@ -346,7 +346,6 @@ pub(crate) fn search_threads(
                 100,
                 &cancellation_flag,
                 executor,
-                false,
             )
             .await;
 

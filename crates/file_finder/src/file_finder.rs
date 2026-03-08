@@ -13,7 +13,7 @@ use collections::HashMap;
 use editor::Editor;
 use file_finder_settings::{FileFinderSettings, FileFinderWidth};
 use file_icons::FileIcons;
-use fuzzy::{CharBag, PathMatch, PathMatchCandidate};
+use fuzzy::{CharBag, MatchingMode, PathMatch, PathMatchCandidate};
 use gpui::{
     Action, AnyElement, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
     KeyContext, Modifiers, ModifiersChangedEvent, ParentElement, Render, Styled, Task, WeakEntity,
@@ -445,7 +445,7 @@ impl PartialOrd for ProjectPanelOrdMatch {
 #[derive(Debug, Default)]
 struct Matches {
     separate_history: bool,
-    improved_matching: bool,
+    matching_mode: MatchingMode,
     matches: Vec<Match>,
 }
 
@@ -531,7 +531,7 @@ impl Matches {
             self.matches.binary_search_by(|m| {
                 // `reverse()` since if cmp_matches(a, b) == Ordering::Greater, then a is better than b.
                 // And we want the better entries go first.
-                Self::cmp_matches(self.separate_history, self.improved_matching, currently_opened, &m, &entry).reverse()
+                Self::cmp_matches(self.separate_history, self.matching_mode, currently_opened, &m, &entry).reverse()
             })
         }
     }
@@ -558,8 +558,8 @@ impl Matches {
         };
 
         let mut new_history_matches =
-            matching_history_items(history_items, currently_opened, query, self.improved_matching);
-        if self.improved_matching {
+            matching_history_items(history_items, currently_opened, query, self.matching_mode);
+        if self.matching_mode == MatchingMode::WordBoundaryBoosted {
             for m in new_history_matches.values_mut() {
                 if let Match::History {
                     panel_match: Some(pm),
@@ -610,7 +610,7 @@ impl Matches {
     /// If a < b, then a is a worse match, aligning with the `ProjectPanelOrdMatch` ordering.
     fn cmp_matches(
         separate_history: bool,
-        improved_matching: bool,
+        matching_mode: MatchingMode,
         currently_opened: Option<&FoundPath>,
         a: &Match,
         b: &Match,
@@ -660,8 +660,8 @@ impl Matches {
             None => return cmp::Ordering::Greater,
         };
 
-        let a_in_filename = Self::is_filename_match(a_panel_match, improved_matching);
-        let b_in_filename = Self::is_filename_match(b_panel_match, improved_matching);
+        let a_in_filename = Self::is_filename_match(a_panel_match, matching_mode);
+        let b_in_filename = Self::is_filename_match(b_panel_match, matching_mode);
 
         match (a_in_filename, b_in_filename) {
             (true, false) => return cmp::Ordering::Greater,
@@ -673,7 +673,7 @@ impl Matches {
     }
 
     /// Determines if the match occurred within the filename rather than in the path
-    fn is_filename_match(panel_match: &ProjectPanelOrdMatch, improved_matching: bool) -> bool {
+    fn is_filename_match(panel_match: &ProjectPanelOrdMatch, matching_mode: MatchingMode) -> bool {
         if panel_match.0.positions.is_empty() {
             return false;
         }
@@ -684,7 +684,7 @@ impl Matches {
 
             if let Some(filename_pos) = path_str.rfind(&*filename_str) {
                 if panel_match.0.positions[0] >= filename_pos {
-                    if improved_matching {
+                    if matching_mode == MatchingMode::WordBoundaryBoosted {
                         return panel_match.0.positions.iter().all(|p| *p >= filename_pos);
                     }
                     let mut prev_position = panel_match.0.positions[0];
@@ -707,7 +707,7 @@ fn matching_history_items<'a>(
     history_items: impl IntoIterator<Item = &'a FoundPath>,
     currently_opened: Option<&'a FoundPath>,
     query: &FileSearchQuery,
-    improved_matching: bool,
+    matching_mode: MatchingMode,
 ) -> HashMap<Arc<Path>, Match> {
     let mut candidates_paths = HashMap::default();
 
@@ -748,13 +748,13 @@ fn matching_history_items<'a>(
     for (worktree, candidates) in history_items_by_worktrees {
         let max_results = candidates.len() + 1;
         matching_history_paths.extend(
-            fuzzy::match_fixed_path_set(
+            fuzzy::match_fixed_path_set_with_mode(
                 candidates,
                 worktree.to_usize(),
                 query.path_query(),
                 false,
                 max_results,
-                improved_matching,
+                matching_mode,
             )
             .into_iter()
             .filter_map(|path_match| {
@@ -900,21 +900,25 @@ impl FileFinderDelegate {
             })
             .collect::<Vec<_>>();
 
-        let improved_matching = FileFinderSettings::get_global(cx).improved_matching;
+        let matching_mode = if FileFinderSettings::get_global(cx).improved_matching {
+            MatchingMode::WordBoundaryBoosted
+        } else {
+            MatchingMode::Default
+        };
         let search_id = util::post_inc(&mut self.search_count);
         self.cancel_flag.store(true, atomic::Ordering::Relaxed);
         self.cancel_flag = Arc::new(AtomicBool::new(false));
         let cancel_flag = self.cancel_flag.clone();
         cx.spawn_in(window, async move |picker, cx| {
             let path_query = query.path_query().to_string();
-            let tokens: Vec<&str> = if improved_matching {
+            let tokens: Vec<&str> = if matching_mode == MatchingMode::WordBoundaryBoosted {
                 path_query.split_whitespace().collect()
             } else {
                 vec![&path_query]
             };
 
             let matches = if tokens.len() <= 1 {
-                fuzzy::match_path_sets(
+                fuzzy::match_path_sets_with_mode(
                     candidate_sets.as_slice(),
                     &path_query,
                     relative_to,
@@ -922,7 +926,7 @@ impl FileFinderDelegate {
                     100,
                     &cancel_flag,
                     cx.background_executor().clone(),
-                    improved_matching,
+                    matching_mode,
                 )
                 .await
             } else {
@@ -931,7 +935,7 @@ impl FileFinderDelegate {
                     if cancel_flag.load(atomic::Ordering::Relaxed) {
                         break;
                     }
-                    let result = fuzzy::match_path_sets(
+                    let result = fuzzy::match_path_sets_with_mode(
                         candidate_sets.as_slice(),
                         token,
                         relative_to.clone(),
@@ -939,7 +943,7 @@ impl FileFinderDelegate {
                         1000,
                         &cancel_flag,
                         cx.background_executor().clone(),
-                        improved_matching,
+                        matching_mode,
                     )
                     .await;
                     token_results.push(result);
@@ -1024,6 +1028,11 @@ impl FileFinderDelegate {
         cx: &mut Context<Picker<Self>>,
     ) {
         if search_id >= self.latest_search_id {
+            self.matches.matching_mode = if FileFinderSettings::get_global(cx).improved_matching {
+                MatchingMode::WordBoundaryBoosted
+            } else {
+                MatchingMode::Default
+            };
             self.latest_search_id = search_id;
             let query_changed = Some(query.path_query())
                 != self
@@ -1397,8 +1406,12 @@ impl PickerDelegate for FileFinderDelegate {
         window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     ) -> Task<()> {
-        let improved_matching = FileFinderSettings::get_global(cx).improved_matching;
-        let raw_query = if improved_matching {
+        let matching_mode = if FileFinderSettings::get_global(cx).improved_matching {
+            MatchingMode::WordBoundaryBoosted
+        } else {
+            MatchingMode::Default
+        };
+        let raw_query = if matching_mode == MatchingMode::WordBoundaryBoosted {
             raw_query
         } else {
             raw_query.replace(' ', "")
@@ -1457,7 +1470,7 @@ impl PickerDelegate for FileFinderDelegate {
                 self.latest_search_query = None;
                 self.matches = Matches {
                     separate_history: self.separate_history,
-                    improved_matching,
+                    matching_mode,
                     ..Matches::default()
                 };
                 self.matches.push_new_matches(

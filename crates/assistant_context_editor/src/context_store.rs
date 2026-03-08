@@ -749,7 +749,6 @@ impl ContextStore {
                     100,
                     &Default::default(),
                     executor,
-                    false,
                 )
                 .await;
 

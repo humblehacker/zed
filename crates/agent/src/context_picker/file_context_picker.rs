@@ -258,7 +258,6 @@ pub(crate) fn search_files(
                 100,
                 &cancellation_flag,
                 executor,
-                false,
             )
             .await
             .into_iter()

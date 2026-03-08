@@ -1,5 +1,5 @@
 use crate::{
-    CharBag,
+    CharBag, MatchingMode,
     matcher::{MatchCandidate, Matcher},
 };
 use gpui::BackgroundExecutor;
@@ -121,7 +121,32 @@ pub async fn match_strings<T>(
     max_results: usize,
     cancel_flag: &AtomicBool,
     executor: BackgroundExecutor,
-    word_boundary_boost: bool,
+) -> Vec<StringMatch>
+where
+    T: Borrow<StringMatchCandidate> + Sync,
+{
+    match_strings_with_mode(
+        candidates,
+        query,
+        smart_case,
+        penalize_length,
+        max_results,
+        cancel_flag,
+        executor,
+        MatchingMode::Default,
+    )
+    .await
+}
+
+pub async fn match_strings_with_mode<T>(
+    candidates: &[T],
+    query: &str,
+    smart_case: bool,
+    penalize_length: bool,
+    max_results: usize,
+    cancel_flag: &AtomicBool,
+    executor: BackgroundExecutor,
+    matching_mode: MatchingMode,
 ) -> Vec<StringMatch>
 where
     T: Borrow<StringMatchCandidate> + Sync,
@@ -168,7 +193,7 @@ where
                         query_char_bag,
                         smart_case,
                         penalize_length,
-                        word_boundary_boost,
+                        matching_mode,
                     );
 
                     matcher.match_candidates(

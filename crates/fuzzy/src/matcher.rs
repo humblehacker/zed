@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{self, AtomicBool},
 };
 
-use crate::CharBag;
+use crate::{CharBag, MatchingMode};
 
 const BASE_DISTANCE_PENALTY: f64 = 0.6;
 const ADDITIONAL_DISTANCE_PENALTY: f64 = 0.05;
@@ -18,7 +18,7 @@ pub struct Matcher<'a> {
     query_char_bag: CharBag,
     smart_case: bool,
     penalize_length: bool,
-    word_boundary_boost: bool,
+    matching_mode: MatchingMode,
     min_score: f64,
     match_positions: Vec<usize>,
     last_positions: Vec<usize>,
@@ -38,7 +38,7 @@ impl<'a> Matcher<'a> {
         query_char_bag: CharBag,
         smart_case: bool,
         penalize_length: bool,
-        word_boundary_boost: bool,
+        matching_mode: MatchingMode,
     ) -> Self {
         Self {
             query,
@@ -51,8 +51,12 @@ impl<'a> Matcher<'a> {
             best_position_matrix: Vec::new(),
             smart_case,
             penalize_length,
-            word_boundary_boost,
+            matching_mode,
         }
+    }
+
+    fn is_word_boundary_boosted(&self) -> bool {
+        self.matching_mode == MatchingMode::WordBoundaryBoosted
     }
 
     /// Filter and score fuzzy match candidates. Results are returned unsorted, in the same order as
@@ -172,7 +176,7 @@ impl<'a> Matcher<'a> {
             .unwrap_or(prefix.len());
         // Collect word boundary positions in the filename portion.
         let mut filename_boundaries: Vec<usize> = Vec::new();
-        if self.word_boundary_boost {
+        if self.is_word_boundary_boosted() {
             // Position 0 of the filename is always a boundary (start of name).
             filename_boundaries.push(filename_start_char);
             for pos in (filename_start_char + 1)..path_len {
@@ -231,7 +235,7 @@ impl<'a> Matcher<'a> {
             char_ix = match_char_ix + 1;
         }
 
-        if self.word_boundary_boost && !self.query.is_empty() {
+        if self.is_word_boundary_boosted() && !self.query.is_empty() {
             let filename_ratio = filename_match_count as f64 / self.query.len() as f64;
 
             // Count how many query chars match the first N word boundaries
@@ -353,7 +357,7 @@ impl<'a> Matcher<'a> {
 
                     if last == MAIN_SEPARATOR {
                         char_score = 0.9;
-                    } else if is_word_boundary && self.word_boundary_boost {
+                    } else if is_word_boundary && self.is_word_boundary_boosted() {
                         char_score = 1.2;
                     } else if is_word_boundary {
                         char_score = 0.8;
@@ -440,18 +444,18 @@ mod tests {
     #[test]
     fn test_get_last_positions() {
         let mut query: &[char] = &['d', 'c'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true, false);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, MatchingMode::Default);
         let result = matcher.find_last_positions(&['a', 'b', 'c'], &['b', 'd', 'e', 'f']);
         assert!(!result);
 
         query = &['c', 'd'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true, false);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, MatchingMode::Default);
         let result = matcher.find_last_positions(&['a', 'b', 'c'], &['b', 'd', 'e', 'f']);
         assert!(result);
         assert_eq!(matcher.last_positions, vec![2, 4]);
 
         query = &['z', '/', 'z', 'f'];
-        let mut matcher = Matcher::new(query, query, query.into(), false, true, false);
+        let mut matcher = Matcher::new(query, query, query.into(), false, true, MatchingMode::Default);
         let result = matcher.find_last_positions(&['z', 'e', 'd', '/'], &['z', 'e', 'd', '/', 'f']);
         assert!(result);
         assert_eq!(matcher.last_positions, vec![0, 3, 4, 8]);
@@ -681,7 +685,7 @@ mod tests {
             "src/SCSManager.rs",
         ];
 
-        let results = match_single_path_query_scored("SCS", false, true, &paths);
+        let results = match_single_path_query_scored("SCS", false, MatchingMode::WordBoundaryBoosted, &paths);
         assert_eq!(results.len(), 2);
 
         let scs_manager_score = results
@@ -708,7 +712,7 @@ mod tests {
             "src/SomeOtherFile.rs",
         ];
 
-        let results = match_single_path_query_scored("SCService", false, true, &paths);
+        let results = match_single_path_query_scored("SCService", false, MatchingMode::WordBoundaryBoosted, &paths);
         let simulated = results
             .iter()
             .find(|(p, _, _)| p.contains("SimulatedChatService"));
@@ -725,7 +729,7 @@ mod tests {
             "src/simulated-chat-service.rs",
         ];
 
-        let results = match_single_path_query_scored("scs", false, true, &paths);
+        let results = match_single_path_query_scored("scs", false, MatchingMode::WordBoundaryBoosted, &paths);
         assert_eq!(results.len(), 2, "scs should match both snake_case and kebab-case");
     }
 
@@ -736,7 +740,7 @@ mod tests {
             "src/SCSManager.rs",
         ];
 
-        let results = match_single_path_query_scored("SCS", false, true, &paths);
+        let results = match_single_path_query_scored("SCS", false, MatchingMode::WordBoundaryBoosted, &paths);
         assert_eq!(results[0].0, "src/SimulatedChatService.rs",
             "Perfect hump match should rank first");
     }
@@ -744,7 +748,7 @@ mod tests {
     fn match_single_path_query_scored<'a>(
         query: &str,
         smart_case: bool,
-        word_boundary_boost: bool,
+        matching_mode: MatchingMode,
         paths: &[&'a str],
     ) -> Vec<(&'a str, Vec<usize>, f64)> {
         let lowercase_query = query.to_lowercase().chars().collect::<Vec<_>>();
@@ -767,7 +771,7 @@ mod tests {
         }
 
         let mut matcher =
-            Matcher::new(&query, &lowercase_query, query_chars, smart_case, true, word_boundary_boost);
+            Matcher::new(&query, &lowercase_query, query_chars, smart_case, true, matching_mode);
 
         let cancel_flag = AtomicBool::new(false);
         let mut results = Vec::new();
@@ -830,7 +834,7 @@ mod tests {
             });
         }
 
-        let mut matcher = Matcher::new(&query, &lowercase_query, query_chars, smart_case, true, false);
+        let mut matcher = Matcher::new(&query, &lowercase_query, query_chars, smart_case, true, MatchingMode::Default);
 
         let cancel_flag = AtomicBool::new(false);
         let mut results = Vec::new();

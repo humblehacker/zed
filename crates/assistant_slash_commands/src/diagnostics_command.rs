@@ -78,7 +78,6 @@ impl DiagnosticsSlashCommand {
                     100,
                     &cancellation_flag,
                     executor,
-                    false,
                 )
                 .await
             })
@@ -152,7 +151,6 @@ impl SlashCommand for DiagnosticsSlashCommand {
                     10,
                     &cancellation_flag,
                     executor,
-                    false,
                 )
                 .await
                 .into_iter()

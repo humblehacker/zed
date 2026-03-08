@@ -265,7 +265,6 @@ fn tab_items_for_queries(
                         usize::MAX,
                         &cancel,
                         background_executor.clone(),
-                        false,
                     )
                 });
 

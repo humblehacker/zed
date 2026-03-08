@@ -228,7 +228,6 @@ impl ThreadHistory {
                     MAX_MATCHES,
                     &Default::default(),
                     executor,
-                    false,
                 )
                 .await
             }

@@ -422,7 +422,6 @@ impl PickerDelegate for OpenPathDelegate {
                 100,
                 &cancel_flag,
                 cx.background_executor().clone(),
-                false,
             )
             .await;
             if cancel_flag.load(atomic::Ordering::Acquire) {

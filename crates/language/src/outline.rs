@@ -126,7 +126,6 @@ impl<T> Outline<T> {
             100,
             &Default::default(),
             executor.clone(),
-            false,
         )
         .await;
         matches.sort_unstable_by_key(|m| m.candidate_id);

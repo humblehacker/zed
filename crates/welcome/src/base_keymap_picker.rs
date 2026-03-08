@@ -151,7 +151,6 @@ impl PickerDelegate for BaseKeymapSelectorDelegate {
                     100,
                     &Default::default(),
                     background,
-                    false,
                 )
                 .await
             };

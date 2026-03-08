@@ -300,7 +300,6 @@ impl PickerDelegate for ThemeSelectorDelegate {
                     100,
                     &Default::default(),
                     background,
-                    false,
                 )
                 .await
             };

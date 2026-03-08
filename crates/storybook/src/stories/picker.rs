@@ -102,7 +102,6 @@ impl PickerDelegate for Delegate {
                 100,
                 &Default::default(),
                 cx.background_executor().clone(),
-                false,
             ))
             .into_iter()
             .map(|r| r.candidate_id)

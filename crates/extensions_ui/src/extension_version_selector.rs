@@ -150,7 +150,6 @@ impl PickerDelegate for ExtensionVersionSelectorDelegate {
                     100,
                     &Default::default(),
                     background_executor,
-                    false,
                 )
                 .await
             };

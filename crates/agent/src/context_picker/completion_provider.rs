@@ -218,7 +218,6 @@ fn search(
                         100,
                         &Arc::new(AtomicBool::default()),
                         executor,
-                        false,
                     )
                     .await;
 

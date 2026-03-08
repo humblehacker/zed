@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{
-    CharBag,
+    CharBag, MatchingMode,
     matcher::{MatchCandidate, Matcher},
 };
 
@@ -90,7 +90,24 @@ pub fn match_fixed_path_set(
     query: &str,
     smart_case: bool,
     max_results: usize,
-    word_boundary_boost: bool,
+) -> Vec<PathMatch> {
+    match_fixed_path_set_with_mode(
+        candidates,
+        worktree_id,
+        query,
+        smart_case,
+        max_results,
+        MatchingMode::Default,
+    )
+}
+
+pub fn match_fixed_path_set_with_mode(
+    candidates: Vec<PathMatchCandidate>,
+    worktree_id: usize,
+    query: &str,
+    smart_case: bool,
+    max_results: usize,
+    matching_mode: MatchingMode,
 ) -> Vec<PathMatch> {
     let lowercase_query = query.to_lowercase().chars().collect::<Vec<_>>();
     let query = query.chars().collect::<Vec<_>>();
@@ -102,7 +119,7 @@ pub fn match_fixed_path_set(
         query_char_bag,
         smart_case,
         true,
-        word_boundary_boost,
+        matching_mode,
     );
 
     let mut results = Vec::new();
@@ -134,7 +151,29 @@ pub async fn match_path_sets<'a, Set: PathMatchCandidateSet<'a>>(
     max_results: usize,
     cancel_flag: &AtomicBool,
     executor: BackgroundExecutor,
-    word_boundary_boost: bool,
+) -> Vec<PathMatch> {
+    match_path_sets_with_mode(
+        candidate_sets,
+        query,
+        relative_to,
+        smart_case,
+        max_results,
+        cancel_flag,
+        executor,
+        MatchingMode::Default,
+    )
+    .await
+}
+
+pub async fn match_path_sets_with_mode<'a, Set: PathMatchCandidateSet<'a>>(
+    candidate_sets: &'a [Set],
+    query: &str,
+    relative_to: Option<Arc<Path>>,
+    smart_case: bool,
+    max_results: usize,
+    cancel_flag: &AtomicBool,
+    executor: BackgroundExecutor,
+    matching_mode: MatchingMode,
 ) -> Vec<PathMatch> {
     let path_count: usize = candidate_sets.iter().map(|s| s.len()).sum();
     if path_count == 0 {
@@ -167,7 +206,7 @@ pub async fn match_path_sets<'a, Set: PathMatchCandidateSet<'a>>(
                         query_char_bag,
                         smart_case,
                         true,
-                        word_boundary_boost,
+                        matching_mode,
                     );
 
                     let mut tree_start = 0;

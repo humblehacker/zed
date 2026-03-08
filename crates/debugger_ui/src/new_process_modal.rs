@@ -1283,7 +1283,6 @@ impl PickerDelegate for DebugDelegate {
                 1000,
                 &Default::default(),
                 cx.background_executor().clone(),
-                false,
             )
             .await;
 
