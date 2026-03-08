@@ -558,7 +558,7 @@ impl Matches {
         };
 
         let mut new_history_matches =
-            matching_history_items(history_items, currently_opened, query);
+            matching_history_items(history_items, currently_opened, query, self.improved_matching);
         if self.improved_matching {
             for m in new_history_matches.values_mut() {
                 if let Match::History {
@@ -566,7 +566,7 @@ impl Matches {
                     ..
                 } = m
                 {
-                    pm.0.score *= 1.2;
+                    pm.0.score *= 1.15;
                 }
             }
         }
@@ -707,6 +707,7 @@ fn matching_history_items<'a>(
     history_items: impl IntoIterator<Item = &'a FoundPath>,
     currently_opened: Option<&'a FoundPath>,
     query: &FileSearchQuery,
+    improved_matching: bool,
 ) -> HashMap<Arc<Path>, Match> {
     let mut candidates_paths = HashMap::default();
 
@@ -753,7 +754,7 @@ fn matching_history_items<'a>(
                 query.path_query(),
                 false,
                 max_results,
-                false,
+                improved_matching,
             )
             .into_iter()
             .filter_map(|path_match| {
