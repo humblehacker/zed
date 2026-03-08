@@ -170,11 +170,38 @@ impl<'a> Matcher<'a> {
             .rposition(|c| *c == std::path::MAIN_SEPARATOR)
             .map(|i| prefix.len() + i + 1)
             .unwrap_or(prefix.len());
+        // Collect word boundary positions in the filename portion.
+        let mut filename_boundaries: Vec<usize> = Vec::new();
+        if self.word_boundary_boost {
+            // Position 0 of the filename is always a boundary (start of name).
+            filename_boundaries.push(filename_start_char);
+            for pos in (filename_start_char + 1)..path_len {
+                let prev = prefix
+                    .get(pos - 1)
+                    .or_else(|| path.get(pos - 1 - prefix.len()))
+                    .copied();
+                let curr = prefix
+                    .get(pos)
+                    .or_else(|| path.get(pos - prefix.len()))
+                    .copied();
+                if let (Some(prev), Some(curr)) = (prev, curr) {
+                    let is_boundary = prev == '-'
+                        || prev == '_'
+                        || prev == ' '
+                        || prev.is_numeric()
+                        || (prev.is_lowercase() && curr.is_uppercase());
+                    if is_boundary {
+                        filename_boundaries.push(pos);
+                    }
+                }
+            }
+        }
+
         let mut cur_start = 0;
         let mut byte_ix = 0;
         let mut char_ix = 0;
         let mut filename_match_count = 0usize;
-        let mut boundary_match_count = 0usize;
+        let mut match_char_positions: Vec<usize> = Vec::new();
         for i in 0..self.query.len() {
             let match_char_ix = self.best_position_matrix[i * path_len + cur_start];
             while char_ix < match_char_ix {
@@ -192,29 +219,7 @@ impl<'a> Matcher<'a> {
                 filename_match_count += 1;
             }
 
-            if self.word_boundary_boost && match_char_ix > 0 {
-                let prev = prefix
-                    .get(match_char_ix - 1)
-                    .or_else(|| path.get(match_char_ix - 1 - prefix.len()))
-                    .copied();
-                let curr = prefix
-                    .get(match_char_ix)
-                    .or_else(|| path.get(match_char_ix - prefix.len()))
-                    .copied();
-                if let (Some(prev), Some(curr)) = (prev, curr) {
-                    let is_boundary = prev == std::path::MAIN_SEPARATOR
-                        || prev == '-'
-                        || prev == '_'
-                        || prev == ' '
-                        || prev.is_numeric()
-                        || (prev.is_lowercase() && curr.is_uppercase());
-                    if is_boundary {
-                        boundary_match_count += 1;
-                    }
-                }
-            } else if self.word_boundary_boost && match_char_ix == 0 {
-                boundary_match_count += 1;
-            }
+            match_char_positions.push(match_char_ix);
 
             let matched_ch = prefix
                 .get(match_char_ix)
@@ -228,8 +233,24 @@ impl<'a> Matcher<'a> {
 
         if self.word_boundary_boost && !self.query.is_empty() {
             let filename_ratio = filename_match_count as f64 / self.query.len() as f64;
-            let boundary_ratio = boundary_match_count as f64 / self.query.len() as f64;
-            return score * (1.0 + filename_ratio * 0.5) * (1.0 + boundary_ratio * 1.0);
+
+            // Count how many query chars match the first N word boundaries
+            // of the filename, where N = query length. This distinguishes
+            // perfect abbreviations (SCS → S.C.S.) from scattered boundary
+            // matches (SCS → S...C...S across many words).
+            let mut first_boundary_hits = 0usize;
+            for (qi, &match_pos) in match_char_positions.iter().enumerate() {
+                if qi < filename_boundaries.len()
+                    && match_pos == filename_boundaries[qi]
+                {
+                    first_boundary_hits += 1;
+                } else {
+                    break;
+                }
+            }
+            let hump_ratio = first_boundary_hits as f64 / self.query.len() as f64;
+
+            return score * (1.0 + filename_ratio * 0.5) * (1.0 + hump_ratio * 1.5);
         }
 
         score
